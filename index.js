@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const http = require('http');
 
 // Создаем веб-заглушку для хостинга Render
@@ -10,134 +10,195 @@ const client = new Client({
 
 // НАСТРОЙКА ID КАНАЛОВ И КАТЕГОРИИ
 const CONFIG = {
-    BUTTON_CHANNEL_ID: "1548418283148017837", 
-    ADMIN_CHANNEL_ID: "1548418283148017837",
-    CATEGORY_ID: "1548475260276310016" // Категория (папка), где будут открываться временные каналы
+    BUTTON_CHANNEL_ID: "ID_КАНАЛА_ГДЕ_БУДЕТ_КНОПКА", 
+    ADMIN_CHANNEL_ID: "ID_КАНАЛА_КУДА_ПРИДУТ_ОТВЕТЫ",
+    CATEGORY_ID: "ID_КАТЕГОРИИ_ГДЕ_СОЗДАВАТЬ_АНКЕТЫ" 
 };
+
+// Хранилище для временных данных сессий заполнения
+const sessions = new Map();
 
 client.once('ready', () => {
     console.log(`🤖 Бот успешно запущен под именем: ${client.user.tag}`);
 });
 
-// Слушаем команду для отправки кнопки
+// Отправка стартовой кнопки администратором
 client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
+    if (message.author.bot || message.content !== '!форма') return;
+    if (message.channel.id !== CONFIG.BUTTON_CHANNEL_ID) return;
 
-    if (message.content === '!форма') {
-        if (message.channel.id !== CONFIG.BUTTON_CHANNEL_ID) return;
+    const embed = new EmbedBuilder()
+        .setTitle('✨ Подача заявки / Заполнение анкеты ✨')
+        .setDescription('Нажмите на кнопку ниже, чтобы открыть форму заполнения.')
+        .setColor('#2ecc71');
 
-        const embed = new EmbedBuilder()
-            .setTitle('✨ Подача заявки / Заполнение анкеты ✨')
-            .setDescription('Нажмите на кнопку ниже, чтобы начать заполнение формы прямо на сервере. Бот создаст для вас приватный канал.')
-            .setColor('#2ecc71');
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('btn_open_modal_start')
+            .setLabel('Заполнить анкету')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('📝')
+    );
 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('btn_start_wizard')
-                .setLabel('Заполнить анкету')
-                .setStyle(ButtonStyle.Success)
-                .setEmoji('📝')
-        );
-
-        await message.channel.send({ embeds: [embed], components: [row] });
-        await message.delete().catch(() => {});
-    }
+    await message.channel.send({ embeds: [embed], components: [row] });
+    await message.delete().catch(() => {});
 });
 
-// Логика пошагового опроса в приватном канале
+// Обработка интеракций (Кнопки, Модальные окна, Меню)
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton() || interaction.customId !== 'btn_start_wizard') return;
+    
+    // 1. Клик по главной кнопке -> Открываем окно для текстовых полей
+    if (interaction.isButton() && interaction.customId === 'btn_open_modal_start') {
+        const modal = new ModalBuilder()
+            .setCustomId('mdl_text_inputs')
+            .setTitle('Анкета: Текстовые поля');
 
-    await interaction.deferReply({ ephemeral: true });
+        const t1 = new TextInputBuilder().setCustomId('inp_text1').setLabel('Текстовое поле №1').setStyle(TextInputStyle.Short).setRequired(true);
+        const t2 = new TextInputBuilder().setCustomId('inp_text2').setLabel('Текстовое поле №2').setStyle(TextInputStyle.Short).setRequired(true);
 
-    const guild = interaction.guild;
-    const user = interaction.user;
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(t1),
+            new ActionRowBuilder().addComponents(t2)
+        );
+        return await interaction.showModal(modal);
+    }
 
-    // 1. Создаем приватный канал для пользователя
-    const ticketChannel = await guild.channels.create({
-        name: `анкета-${user.username}`,
-        type: ChannelType.GuildText,
-        parent: CONFIG.CATEGORY_ID,
-        permissionOverwrites: [
-            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory] },
-            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] }
-        ]
-    });
+    // 2. Пользователь отправил текстовое окно -> Создаем приватный канал для меню и картинки
+    if (interaction.isModalSubmit() && interaction.customId === 'mdl_text_inputs') {
+        await interaction.deferReply({ flags: [GatewayIntentBits.Ephemeral] });
 
-    await interaction.editReply({ content: `Приватный канал для заполнения анкеты создан: ${ticketChannel}` });
+        const text1 = interaction.fields.getTextInputValue('inp_text1');
+        const text2 = interaction.fields.getTextInputValue('inp_text2');
+        const guild = interaction.guild;
+        const user = interaction.user;
 
-    // Функция-помощник для ожидания сообщения от конкретного пользователя
-    const askQuestion = async (text) => {
-        await ticketChannel.send(text);
+        // Создаем приватный канал
+        const ticketChannel = await guild.channels.create({
+            name: `анкета-${user.username}`,
+            type: ChannelType.GuildText,
+            parent: CONFIG.CATEGORY_ID,
+            permissionOverwrites: [
+                { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory] },
+                { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] }
+            ]
+        });
+
+        // Сохраняем текстовые данные во временную сессию
+        sessions.set(user.id, { text1, text2, channelId: ticketChannel.id });
+
+        await interaction.editReply({ content: `Приватный канал для завершения анкеты создан: ${ticketChannel}` });
+
+        // Отправляем в приватный канал выпадающее меню вариантов
+        const menuEmbed = new EmbedBuilder()
+            .setTitle('Шаг 3 из 4: Выбор варианта')
+            .setDescription('Пожалуйста, выберите один из трех вариантов в меню ниже:')
+            .setColor('#3498db');
+
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('select_anketa_variant')
+            .setPlaceholder('Нажмите, чтобы выбрать вариант...')
+            .addOptions([
+                { label: 'Вариант А', value: 'Вариант А' },
+                { label: 'Вариант Б', value: 'Вариант Б' },
+                { label: 'Вариант В', value: 'Вариант В' }
+            ]);
+
+        const row = new ActionRowBuilder().addComponents(menu);
+        await ticketChannel.send({ content: `${user}`, embeds: [menuEmbed], components: [row] });
+    }
+
+    // 3. Пользователь выбрал вариант в меню -> Запрашиваем загрузку картинки
+    if (interaction.isStringSelectMenu() && interaction.customId === 'select_anketa_variant') {
+        await interaction.deferUpdate();
+        const user = interaction.user;
+        const session = sessions.get(user.id);
+        if (!session) return;
+
+        session.variant = interaction.values[0]; // Сохраняем выбор
+
+        const ticketChannel = interaction.channel;
+        
+        // Очищаем компоненты меню, чтобы пользователь не нажал дважды
+        await interaction.editReply({ components: [] });
+
+        await ticketChannel.send(`**Шаг 4 из 4.** Отлично! Теперь **прикрепите и отправьте картинку/скриншот** напрямую файлом в этот чат:`);
+
+        // Ждем загрузки файла от пользователя
         const filter = m => m.author.id === user.id;
-        const collected = await ticketChannel.awaitMessages({ filter, max: 1, time: 300000 }); // 5 минут на ответ
-        if (!collected.size) throw new Error('timeout');
-        return collected.first();
-    };
-
-    try {
-        // Пошаговый опрос
-        const msg1 = await askQuestion(`**Шаг 1 из 5.** Введите ответ на текстовый вопрос №1:`);
-        const text1 = msg1.content;
-
-        const msg2 = await askQuestion(`**Шаг 2 из 5.** Введите ответ на текстовый вопрос №2:`);
-        const text2 = msg2.content;
-
-        const msg3 = await askQuestion(`**Шаг 3 из 5.** Укажите дату (например, ДД.ММ.ГГГГ):`);
-        const date = msg3.content;
-
-        const msg4 = await askQuestion(`**Шаг 4 из 5.** Выберите один из трех вариантов (напишите **А**, **Б** или **В**):`);
-        const variant = msg4.content;
-
-        // ШАГ С ПРЯМОЙ ЗАГРУЗКОЙ КАРТИНКИ
-        await ticketChannel.send(`**Шаг 5 из 5.** Пожалуйста, **прикрепите и отправьте картинку/скриншот** напрямую файлом в этот чат:`);
+        const collected = await ticketChannel.awaitMessages({ filter, max: 1, time: 300000 });
         
-        const imgFilter = m => m.author.id === user.id;
-        const imgCollected = await ticketChannel.awaitMessages({ imgFilter, max: 1, time: 300000 });
-        if (!imgCollected.size) throw new Error('timeout');
-        
-        const imgMessage = imgCollected.first();
-        // Берем прямую ссылку на первый прикрепленный файл
+        if (!collected.size) {
+            await ticketChannel.send(`⏱ Время ожидания истекло. Канал удаляется.`);
+            return setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+        }
+
+        const imgMessage = collected.first();
         const attachment = imgMessage.attachments.first();
         const finalImageUrl = attachment ? attachment.url : null;
 
-        await ticketChannel.send(`🎉 Спасибо! Анкета успешно сформирована и отправлена администрации. Этот канал автоматически удалится через 5 секунд.`);
+        await ticketChannel.send(`🎉 Спасибо! Анкета успешно отправлена администрации. Этот канал закроется через 5 секунд.`);
 
-        // Отправляем красивый Embed с реальной картинкой в админ-канал
-        const adminChannel = guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
+        // РАСЧЕТ АВТО-ДАТ
+        const now = new Date();
+        const nextMonth = new Date();
+        nextMonth.setMonth(now.getMonth() + 1);
+
+        // Переводим в формат Discord Timestamp (секунды) для красивого отображения у всех в клиенте
+        const tsToday = Math.floor(now.getTime() / 1000);
+        const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
+
+        // Отправляем финальный отчет админам с кнопками Одобрить/Отказать
+        const adminChannel = interaction.guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
         if (adminChannel) {
             const adminEmbed = new EmbedBuilder()
-                .setTitle(`📥 Получена новая анкета от ${user.username}`)
+                .setTitle(`📥 Новая заполненная анкета от ${user.username}`)
                 .setColor('#3498db')
                 .addFields(
-                    { name: 'Текст 1', value: text1, inline: false },
-                    { name: 'Текст 2', value: text2, inline: false },
-                    { name: 'Дата', value: date, inline: true },
-                    { name: 'Выбранный вариант', value: variant, inline: true }
+                    { name: 'Текст 1', value: session.text1, inline: false },
+                    { name: 'Текст 2', value: session.text2, inline: false },
+                    { name: 'Выбранный вариант', value: session.variant, inline: false },
+                    { name: 'Дата подачи', value: `<t:${tsToday}:D>`, inline: true },
+                    { name: 'Дата окончания (через месяц)', value: `<t:${tsNextMonth}:D>`, inline: true }
                 )
-                .setFooter({ text: `ID: ${user.id}` })
+                .setFooter({ text: `ID автора: ${user.id}` })
                 .setTimestamp();
 
-            if (finalImageUrl) {
-                adminEmbed.setImage(finalImageUrl); // Встраиваем загруженную картинку прямо в тело формы
-            } else {
-                adminEmbed.setDescription(`⚠️ Пользователь не прикрепил изображение.`);
-            }
+            if (finalImageUrl) adminEmbed.setImage(finalImageUrl);
 
-            await adminChannel.send({ embeds: [adminEmbed] });
+            const adminButtons = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('admin_approve').setLabel('Одобрить').setStyle(ButtonStyle.Success).setEmoji('✅'),
+                new ButtonBuilder().setCustomId('admin_deny').setLabel('Отказать').setStyle(ButtonStyle.Danger).setEmoji('❌')
+            );
+
+            await adminChannel.send({ embeds: [adminEmbed], components: [adminButtons] });
         }
 
-        // Удаляем временный канал через 5 секунд
+        // Очищаем сессию и удаляем приватный канал
+        sessions.delete(user.id);
         setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+    }
 
-    } catch (error) {
-        if (error.message === 'timeout') {
-            await ticketChannel.send(`⏱ Время ожидания ответа истекло. Канал будет удален.`);
-            setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
-        } else {
-            console.error(error);
+    // 4. Логика кнопок Одобрить/Отказать в админ-канале
+    if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
+        await interaction.deferUpdate();
+
+        // Получаем текущий Embed из сообщения админов
+        const oldEmbed = interaction.message.embeds[0];
+        if (!oldEmbed) return;
+
+        const updatedEmbed = EmbedBuilder.from(oldEmbed);
+
+        if (interaction.customId === 'admin_approve') {
+            updatedEmbed.setTitle('✅ Отчет принят')
+                        .setColor('#2ecc71'); // Меняем цвет на зеленый
+        } else if (interaction.customId === 'admin_deny') {
+            updatedEmbed.setTitle('❌ Отчет отклонен')
+                        .setColor('#e74c3c'); // Меняем цвет на красный
         }
+
+        // Обновляем сообщение администрации, убирая кнопки управления
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
     }
 });
 
