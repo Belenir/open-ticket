@@ -21,7 +21,7 @@
     "_CONFIG_VERSION":"open-ticket-v4.2.2",
     
     /* Load the bot token from .env or the "token" field below. Leave "token" empty if using "tokenFromENV". */
-    "token":"INSERT_BOT_TOKEN",
+    "token":"process.env.TOKEN",
     "tokenFromENV":false,
     
     "mainColor":"#f8ba00", //Hex color used in most embeds
