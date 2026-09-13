@@ -11,9 +11,9 @@ const client = new Client({
 // НАСТРОЙКА ID КАНАЛОВ, КАТЕГОРИИ И РОЛИ CREATOR
 const CONFIG = {
     BUTTON_CHANNEL_ID: "1548418283148017837", 
-    ADMIN_CHANNEL_ID: "1548418283148017837",
+    ADMIN_CHANNEL_ID: "1548418283148017837", // Теперь можно оставлять одинаковыми, бот ничего не удалит!
     CATEGORY_ID: "1548475260276310016",
-    CREATOR_ROLE_ID: "1548417844864098445" // ПОМЕНЯЙТЕ ТОЛЬКО ТЕКСТ ВНУТРИ КАВЫЧЕК НА ЦИФРЫ
+    CREATOR_ROLE_ID: "1548417844864098445" // Замените на ваш ID роли Creator
 };
 
 // Хранилище для временных данных сессий заполнения
@@ -25,11 +25,10 @@ client.once('ready', async () => {
     try {
         const channel = await client.channels.fetch(CONFIG.BUTTON_CHANNEL_ID);
         if (channel) {
-            const messages = await channel.messages.fetch({ limit: 10 });
-            const botMessages = messages.filter(m => m.author.id === client.user.id);
-            if (botMessages.size > 0) {
-                await channel.bulkDelete(botMessages).catch(() => {});
-            }
+            // Ищем последние 50 сообщений в канале
+            const messages = await channel.messages.fetch({ limit: 50 });
+            // Находим САМОЕ ПОСЛЕДНЕЕ сообщение, которое отправил этот бот
+            const lastBotMessage = messages.filter(m => m.author.id === client.user.id).first();
 
             const embed = new EmbedBuilder()
                 .setTitle('💵 **Отчет о выдаче лицензии** 💵')
@@ -44,11 +43,18 @@ client.once('ready', async () => {
                     .setEmoji('📝')
             );
 
-            await channel.send({ embeds: [embed], components: [row] });
-            console.log('✅ Стартовая кнопка успешно обновлена в канале!');
+            if (lastBotMessage) {
+                // ИСПРАВЛЕНО: Если старая кнопка от бота найдена — мы её ПРОСТО РЕДАКТИРУЕМ
+                await lastBotMessage.edit({ embeds: [embed], components: [row] });
+                console.log('✅ Существующая стартовая кнопка успешно ОТРЕДАКТИРОВАНА в канале!');
+            } else {
+                // Если бот пишет в этот канал впервые и старой кнопки нет — отправляем новую
+                await channel.send({ embeds: [embed], components: [row] });
+                console.log('✅ Новая стартовая кнопка успешно создана в канале!');
+            }
         }
     } catch (err) {
-        console.error('Ошибка автоматической отправки кнопки:', err);
+        console.error('Ошибка автоматического обновления кнопки:', err);
     }
 });
 // Обработка интеракций (Кнопки, Меню выпадающих списков)
@@ -85,7 +91,7 @@ client.on('interactionCreate', async (interaction) => {
             const session = sessions.get(user.id);
             if (!session || session.step !== 3) return;
 
-            session.price = interaction.values[0]; 
+            session.price = interaction.values; 
             session.step = 4; 
 
             const ticketChannel = interaction.channel;
@@ -98,7 +104,6 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
             const member = interaction.member;
             
-            // Если ID роли настроен некорректно или у пользователя её нет — блокируем нажатие
             if (!CONFIG.CREATOR_ROLE_ID || isNaN(CONFIG.CREATOR_ROLE_ID) || !member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
                 return await interaction.reply({ 
                     content: '🛑 **У вас нет роли Creator для управления этим отчетом!**', 
@@ -205,7 +210,6 @@ client.on('messageCreate', async (message) => {
                     new ButtonBuilder().setCustomId('admin_deny').setLabel('Отказать').setStyle(ButtonStyle.Danger).setEmoji('❌')
                 );
 
-                // Корректная отправка тега роли администрации (тегается только если ID указан верно)
                 const mentionContent = (CONFIG.CREATOR_ROLE_ID && !isNaN(CONFIG.CREATOR_ROLE_ID)) ? `<@&${CONFIG.CREATOR_ROLE_ID}>` : "⚠️ Роль Creator не настроена";
                 await adminChannel.send({ content: mentionContent, embeds: [adminEmbed], components: [adminButtons] });
             }
