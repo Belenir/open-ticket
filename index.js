@@ -10,9 +10,9 @@ const client = new Client({
 
 // НАСТРОЙКА ID КАНАЛОВ И КАТЕГОРИИ
 const CONFIG = {
-    BUTTON_CHANNEL_ID: "ID_КАНАЛА_ГДЕ_БУДЕТ_КНОПКА", 
-    ADMIN_CHANNEL_ID: "ID_КАНАЛА_КУДА_ПРИДУТ_ОТВЕТЫ",
-    CATEGORY_ID: "ID_КАТЕГОРИИ_ГДЕ_СОЗДАВАТЬ_АНКЕТЫ" 
+    BUTTON_CHANNEL_ID: "1548418283148017837", 
+    ADMIN_CHANNEL_ID: "1548418283148017837",
+    CATEGORY_ID: "1548475260276310016" 
 };
 
 // Хранилище для временных данных сессий заполнения
