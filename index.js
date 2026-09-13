@@ -8,12 +8,13 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// НАСТРОЙКА ID КАНАЛОВ, КАТЕГОРИИ И РОЛИ CREATOR
+// НАСТРОЙКА ID КАНАЛОВ, КАТЕГОРИИ, РОЛИ И КНОПКИ
 const CONFIG = {
     BUTTON_CHANNEL_ID: "1548418283148017837", 
     ADMIN_CHANNEL_ID: "1548418283148017837", 
     CATEGORY_ID: "1548475260276310016",
-    CREATOR_ROLE_ID: "1548417844864098445" // Укажите ID роли Creator
+    CREATOR_ROLE_ID: "1548417844864098445",
+    BUTTON_MESSAGE_ID: "1548497891243331635" // ИСПРАВЛЕНО: Ваш ID сообщения зафиксирован в коде
 };
 
 // Хранилище для временных данных сессий заполнения
@@ -25,9 +26,6 @@ client.once('ready', async () => {
     try {
         const channel = await client.channels.fetch(CONFIG.BUTTON_CHANNEL_ID);
         if (channel) {
-            const messages = await channel.messages.fetch({ limit: 50 });
-            const lastBotMessage = messages.filter(m => m.author.id === client.user.id).first();
-
             const embed = new EmbedBuilder()
                 .setTitle('💵 **Отчет о выдаче лицензии** 💵')
                 .setDescription('Нажмите на кнопку ниже, чтобы начать заполнение отчета прямо на сервере. Бот создаст для вас приватный канал.')
@@ -41,12 +39,17 @@ client.once('ready', async () => {
                     .setEmoji('📝')
             );
 
-            if (lastBotMessage) {
-                await lastBotMessage.edit({ embeds: [embed], components: [row] });
-                console.log('✅ Существующая стартовая кнопка успешно ОТРЕДАКТИРОВАНА в канале!');
+            let targetMessage = null;
+            if (CONFIG.BUTTON_MESSAGE_ID && !isNaN(CONFIG.BUTTON_MESSAGE_ID)) {
+                targetMessage = await channel.messages.fetch(CONFIG.BUTTON_MESSAGE_ID).catch(() => null);
+            }
+
+            if (targetMessage) {
+                await targetMessage.edit({ embeds: [embed], components: [row] });
+                console.log('✅ Существующая кнопка успешно ОТРЕДАКТИРОВАНА по точному ID!');
             } else {
-                await channel.send({ embeds: [embed], components: [row] });
-                console.log('✅ Новая стартовая кнопка успешно создана в канале!');
+                const sentMessage = await channel.send({ embeds: [embed], components: [row] });
+                console.log(`⚠️ ВНИМАНИЕ! Новая кнопка создана. СКОПИРУЙТЕ ЕЁ ID ИЗ КОНСОЛИ И ВСТАВЬТЕ В КОД: ${sentMessage.id}`);
             }
         }
     } catch (err) {
@@ -76,7 +79,14 @@ client.on('interactionCreate', async (interaction) => {
 
             sessions.set(user.id, { step: 1, userPing: `<@${user.id}>`, channelId: ticketChannel.id });
 
+            // Бот отправляет уведомление со ссылкой на приватный канал
             await interaction.editReply({ content: `Приватный канал для заполнения отчета создан! 📂 Перейдите сюда: ${ticketChannel}` });
+
+            // ИСПРАВЛЕНО: Бот автоматически удаляет это приватное сообщение ровно через 7 секунд
+            setTimeout(() => {
+                interaction.deleteReply().catch(() => {});
+            }, 7000);
+
             await ticketChannel.send(`${user}\n**Вопрос 1 из 4.** Введите: *Имя Фамилия | Статик получившего лицензию*`);
         }
 
@@ -109,13 +119,14 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.deferUpdate();
 
-            const oldEmbed = interaction.message.embeds[0];
-            if (!oldEmbed) return;
+            const oldEmbed = interaction.message.embeds;
+            if (!oldEmbed || oldEmbed.length === 0) return;
 
             const authorMention = oldEmbed.description || "Пользователь";
 
             const updatedEmbed = new EmbedBuilder()
-                .setDescription(oldEmbed.description)
+                .setAuthor(oldEmbed.author ? { name: oldEmbed.author.name, iconURL: oldEmbed.author.iconURL } : null)
+                .setDescription(oldEmbed.description || null)
                 .addFields(oldEmbed.fields)
                 .setFooter(oldEmbed.footer ? { text: oldEmbed.footer.text } : null)
                 .setTimestamp(oldEmbed.timestamp ? new Date(oldEmbed.timestamp) : new Date());
@@ -125,9 +136,9 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             if (interaction.customId === 'admin_approve') {
-                updatedEmbed.setTitle(`✅ Отчет ${authorMention} принят`).setColor('#2ecc71');
+                updatedEmbed.setTitle(`✅ Отчет принят`).setColor('#2ecc71');
             } else if (interaction.customId === 'admin_deny') {
-                updatedEmbed.setTitle(`❌ Отчет ${authorMention} отклонен`).setColor('#e74c3c');
+                updatedEmbed.setTitle(`❌ Отчет отклонен`).setColor('#e74c3c');
             }
 
             await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
@@ -180,8 +191,6 @@ client.on('messageCreate', async (message) => {
         if (session.step === 4) {
             const attachment = message.attachments.first();
             
-            // ИСПРАВЛЕНО: Умная проверка на раннем этапе (Валидатор изображения)
-            // Если вложений нет ИЛИ отправленный файл не является картинкой
             if (!attachment || !attachment.contentType || !attachment.contentType.startsWith('image/')) {
                 return await ticketChannel.send(`⚠️ **Ошибка: Вы не прикрепили изображение или отправили неподдерживаемый файл!**\nПожалуйста, прикрепите и отправьте именно **картинку/скриншот** напрямую файлом в этот чат:`);
             }
@@ -200,8 +209,9 @@ client.on('messageCreate', async (message) => {
             const adminChannel = message.guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
             if (adminChannel) {
                 const adminEmbed = new EmbedBuilder()
-                    .setTitle(`📥 Новый отчет от ${user.username}`)
-                    .setDescription(`${user}`) 
+                    .setAuthor({ name: `Отправитель: ${user.username}`, iconURL: user.displayAvatarURL({ dynamic: true }) })
+                    .setTitle(`📥 Новый отчет о выдаче лицензии`)
+                    .setDescription(`Автор отчета: ${user}`) 
                     .setColor('#3498db')
                     .addFields(
                         { name: 'Имя Фамилия | Статик получившего', value: String(session.nameStatic), inline: false },
@@ -220,7 +230,7 @@ client.on('messageCreate', async (message) => {
                     new ButtonBuilder().setCustomId('admin_deny').setLabel('Отказать').setStyle(ButtonStyle.Danger).setEmoji('❌')
                 );
 
-                const mentionContent = (CONFIG.CREATOR_ROLE_ID && !isNaN(CONFIG.CREATOR_ROLE_ID)) ? `<@&${CONFIG.CREATOR_ROLE_ID}>` : "⚠️ Роль Creator не настроена";
+                const mentionContent = `<@&${CONFIG.CREATOR_ROLE_ID}>`;
                 await adminChannel.send({ content: mentionContent, embeds: [adminEmbed], components: [adminButtons] });
             }
 
@@ -232,5 +242,7 @@ client.on('messageCreate', async (message) => {
         console.error('❌ Ошибка во время обработки текстового ответа пользователя:', error);
     }
 });
+
+client.on('error', console.error); // Защита от аварийного падения WebSocket-соединения
 
 client.login(process.env.TOKEN);
