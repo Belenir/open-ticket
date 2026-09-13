@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
 const http = require('http');
 
 // Создаем веб-заглушку для хостинга Render
@@ -8,11 +8,12 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// НАСТРОЙКА ID КАНАЛОВ И КАТЕГОРИИ
+// НАСТРОЙКА ID КАНАЛОВ, КАТЕГОРИИ И РОЛИ CREATOR
 const CONFIG = {
     BUTTON_CHANNEL_ID: "1548418283148017837", 
     ADMIN_CHANNEL_ID: "1548418283148017837",
-    CATEGORY_ID: "1548475260276310016" 
+    CATEGORY_ID: "1548475260276310016",
+    CREATOR_ROLE_ID: "ID_ВАШЕЙ_РОЛИ_CREATOR" // Убедитесь, что здесь вставлен цифровой ID роли
 };
 
 // Хранилище для временных данных сессий заполнения
@@ -21,11 +22,9 @@ const sessions = new Map();
 client.once('ready', async () => {
     console.log(`🤖 Бот успешно запущен под именем: ${client.user.tag}`);
 
-    // Автоматическая отправка кнопки при старте бота
     try {
         const channel = await client.channels.fetch(CONFIG.BUTTON_CHANNEL_ID);
         if (channel) {
-            // Очищаем старые сообщения бота в этом канале, чтобы кнопки не дублировались
             const messages = await channel.messages.fetch({ limit: 10 });
             const botMessages = messages.filter(m => m.author.id === client.user.id);
             if (botMessages.size > 0) {
@@ -33,14 +32,14 @@ client.once('ready', async () => {
             }
 
             const embed = new EmbedBuilder()
-                .setTitle('✨ Подача заявки / Заполнение анкеты ✨')
-                .setDescription('Нажмите на кнопку ниже, чтобы начать заполнение формы прямо на сервере. Бот создаст для вас приватный канал.')
+                .setTitle('💵 **Отчет о выдаче лицензии** 💵')
+                .setDescription('Нажмите на кнопку ниже, чтобы начать заполнение отчета прямо на сервере. Бот создаст для вас приватный канал.')
                 .setColor('#2ecc71');
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setCustomId('btn_open_modal_start')
-                    .setLabel('Заполнить анкету')
+                    .setCustomId('btn_start_wizard')
+                    .setLabel('Заполнить отчет')
                     .setStyle(ButtonStyle.Success)
                     .setEmoji('📝')
             );
@@ -52,37 +51,18 @@ client.once('ready', async () => {
         console.error('Ошибка автоматической отправки кнопки:', err);
     }
 });
-// Обработка интеракций (Кнопки, Модальные окна, Меню)
+// Обработка интеракций (Кнопки, Меню выпадающих списков)
 client.on('interactionCreate', async (interaction) => {
     try {
-        // 1. Клик по главной кнопке -> Открываем окно для текстовых полей
-        if (interaction.isButton() && interaction.customId === 'btn_open_modal_start') {
-            const modal = new ModalBuilder()
-                .setCustomId('mdl_text_inputs')
-                .setTitle('Анкета: Текстовые поля');
-
-            const t1 = new TextInputBuilder().setCustomId('inp_text1').setLabel('Текстовое поле №1').setStyle(TextInputStyle.Short).setRequired(true);
-            const t2 = new TextInputBuilder().setCustomId('inp_text2').setLabel('Текстовое поле №2').setStyle(TextInputStyle.Short).setRequired(true);
-
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(t1),
-                new ActionRowBuilder().addComponents(t2)
-            );
-            return await interaction.showModal(modal);
-        }
-
-        // 2. Пользователь отправил текстовое окно -> Создаем приватный канал для меню и картинки
-        if (interaction.isModalSubmit() && interaction.customId === 'mdl_text_inputs') {
+        // 1. Нажатие на кнопку "Заполнить отчет" -> Создаем канал и даем ссылку
+        if (interaction.isButton() && interaction.customId === 'btn_start_wizard') {
             await interaction.deferReply({ ephemeral: true });
 
-            const text1 = interaction.fields.getTextInputValue('inp_text1');
-            const text2 = interaction.fields.getTextInputValue('inp_text2');
             const guild = interaction.guild;
             const user = interaction.user;
 
-            // Создаем приватный канал
             const ticketChannel = await guild.channels.create({
-                name: `анкета-${user.username}`,
+                name: `отчет-${user.username}`,
                 type: ChannelType.GuildText,
                 parent: CONFIG.CATEGORY_ID,
                 permissionOverwrites: [
@@ -92,62 +72,110 @@ client.on('interactionCreate', async (interaction) => {
                 ]
             });
 
-            // Сохраняем текстовые данные во временную сессию
-            sessions.set(user.id, { text1, text2, channelId: ticketChannel.id });
+            sessions.set(user.id, { step: 1, userPing: `<@${user.id}>`, channelId: ticketChannel.id });
 
-            await interaction.editReply({ content: `Приватный канал для завершения анкеты создан: ${ticketChannel}` });
-
-            // Отправляем в приватный канал выпадающее меню вариантов
-            const menuEmbed = new EmbedBuilder()
-                .setTitle('Шаг 3 из 4: Выбор варианта')
-                .setDescription('Пожалуйста, выберите один из трех вариантов в меню ниже:')
-                .setColor('#3498db');
-
-            const menu = new StringSelectMenuBuilder()
-                .setCustomId('select_anketa_variant')
-                .setPlaceholder('Нажмите, чтобы выбрать вариант...')
-                .addOptions([
-                    { label: 'Вариант А', value: 'Вариант А' },
-                    { label: 'Вариант Б', value: 'Вариант Б' },
-                    { label: 'Вариант В', value: 'Вариант В' }
-                ]);
-
-            const row = new ActionRowBuilder().addComponents(menu);
-            await ticketChannel.send({ content: `${user}`, embeds: [menuEmbed], components: [row] });
+            await interaction.editReply({ content: `Приватный канал для заполнения отчета создан! 📂 Перейдите сюда: ${ticketChannel}` });
+            await ticketChannel.send(`${user}\n**Вопрос 1 из 4.** Введите: *Имя Фамилия | Статик получившего лицензию*`);
         }
 
-        // 3. Пользователь выбрал вариант в меню -> Запрашиваем загрузку картинки
-        if (interaction.isStringSelectMenu() && interaction.customId === 'select_anketa_variant') {
+        // 2. Логика интерактивного выпадающего меню стоимости (Шаг 3)
+        if (interaction.isStringSelectMenu() && interaction.customId === 'select_license_price') {
             await interaction.deferUpdate();
             const user = interaction.user;
             const session = sessions.get(user.id);
-            if (!session) return;
+            if (!session || session.step !== 3) return;
 
-            session.variant = interaction.values[0]; // ИСПРАВЛЕНО: Извлекаем строку из массива вариантов
+            session.price = interaction.values[0]; 
+            session.step = 4; 
 
             const ticketChannel = interaction.channel;
-            
-            // Удаляем выпадающее меню
-            await interaction.editReply({ components: [] });
+            await interaction.editReply({ components: [] }); 
 
-            await ticketChannel.send(`**Шаг 4 из 4.** Отлично! Теперь **прикрепите и отправьте картинку/скриншот** напрямую файлом в этот чат:`);
+            await ticketChannel.send(`**Вопрос 4 из 4.** Отлично! Теперь прикрепите и отправьте **Скриншот переписки с человеком о лицензии** напрямую файлом в этот чат:`);
+        }
 
-            // Ждем загрузки файла от пользователя
-            const filter = m => m.author.id === user.id;
-            const collected = await ticketChannel.awaitMessages({ filter, max: 1, time: 300000 });
+        // 3. Обработка кнопок «Одобрить» и «Отказать» (С ПРОВЕРКОЙ НА РОЛЬ CREATOR)
+        if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
             
-            if (!collected.size) {
-                await ticketChannel.send(`⏱ Время ожидания истекло. Канал удаляется.`);
-                return setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+            // Проверяем, есть ли у пользователя роль Creator
+            const member = interaction.member;
+            if (!member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
+                // Если роли нет, шлем скрытый отказ (никто другой его не увидит)
+                return await interaction.reply({ 
+                    content: '🛑 **У вас нет роли Creator для управления этим отчетом!**', 
+                    ephemeral: true 
+                });
             }
 
-            const imgMessage = collected.first();
-            const attachment = imgMessage.attachments.first();
-            const finalImageUrl = attachment ? attachment.url : null;
+            await interaction.deferUpdate();
 
-            await ticketChannel.send(`🎉 Спасибо! Анкета успешно отправлена администрации. Этот канал закроется через 5 секунд.`);
+            const oldEmbeds = interaction.message.embeds;
+            if (!oldEmbeds || oldEmbeds.length === 0) return;
 
-            // АВТОМАТИЧЕСКИЙ РАСЧЕТ ДАТ
+            const updatedEmbed = EmbedBuilder.from(oldEmbeds[0]);
+            const authorTag = interaction.message.description || "Пользователь";
+
+            if (interaction.customId === 'admin_approve') {
+                updatedEmbed.setTitle(`✅ Отчет ${authorTag} принят`)
+                            .setColor('#2ecc71');
+            } else if (interaction.customId === 'admin_deny') {
+                updatedEmbed.setTitle(`❌ Отчет ${authorTag} отклонен`)
+                            .setColor('#e74c3c');
+            }
+
+            await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+        }
+
+    } catch (interError) {
+        console.error('❌ Ошибка во время обработки нажатий бота:', interError);
+    }
+});
+
+// Слушаем обычные сообщения в приватных текстовых каналах (Шаги 1, 2 и 4)
+client.on('messageCreate', async (message) => {
+    try {
+        if (message.author.bot) return;
+
+        const user = message.author;
+        const session = sessions.get(user.id);
+        if (!session || message.channel.id !== session.channelId) return;
+
+        const ticketChannel = message.channel;
+
+        if (session.step === 1) {
+            session.nameStatic = message.content;
+            session.step = 2;
+            return await ticketChannel.send(`**Вопрос 2 из 4.** Введите: *Дискорд получившего лицензию*`);
+        }
+
+        if (session.step === 2) {
+            session.discordUser = message.content;
+            session.step = 3;
+
+            const menuEmbed = new EmbedBuilder()
+                .setTitle('Вопрос 3 из 4: Стоимость выдачи')
+                .setDescription('Пожалуйста, выберите стоимость выдачи лицензии из вариантов ниже:')
+                .setColor('#3498db');
+
+            const menu = new StringSelectMenuBuilder()
+                .setCustomId('select_license_price')
+                .setPlaceholder('Нажмите для выбора цены...')
+                .addOptions([
+                    { label: '100 000$', value: '100 000$' },
+                    { label: '300 000$', value: '300 000$' },
+                    { label: '500 000$', value: '500 000$' }
+                ]);
+
+            const row = new ActionRowBuilder().addComponents(menu);
+            return await ticketChannel.send({ embeds: [menuEmbed], components: [row] });
+        }
+
+        if (session.step === 4) {
+            const attachment = message.attachments.first();
+            const finalImageUrl = attachment ? attachment.proxyURL : null;
+
+            await ticketChannel.send(`🎉 Спасибо! Отчет успешно сформирован.\n\n🔗 Нажмите сюда, чтобы вернуться обратно: <#${CONFIG.BUTTON_CHANNEL_ID}>\n*(Этот чат автоматически удалится через 5 секунд)*`);
+
             const now = new Date();
             const nextMonth = new Date();
             nextMonth.setMonth(now.getMonth() + 1);
@@ -155,20 +183,20 @@ client.on('interactionCreate', async (interaction) => {
             const tsToday = Math.floor(now.getTime() / 1000);
             const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
 
-            // Отправляем финальный отчет админам с кнопками Одобрить/Отказать
-            const adminChannel = interaction.guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
+            const adminChannel = message.guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
             if (adminChannel) {
                 const adminEmbed = new EmbedBuilder()
-                    .setTitle(`📥 Новая заполненная анкета от ${user.username}`)
+                    .setTitle(`📥 Новый отчет от ${user.username}`)
+                    .setDescription(`<@${user.id}>`) 
                     .setColor('#3498db')
                     .addFields(
-                        { name: 'Текст 1', value: String(session.text1), inline: false },
-                        { name: 'Текст 2', value: String(session.text2), inline: false },
-                        { name: 'Выбранный вариант', value: String(session.variant), inline: false },
-                        { name: 'Дата подачи', value: `<t:${tsToday}:D>`, inline: true },
-                        { name: 'Дата окончания (через месяц)', value: `<t:${tsNextMonth}:D>`, inline: true }
+                        { name: 'Имя Фамилия | Статик получившего', value: String(session.nameStatic), inline: false },
+                        { name: 'Дискорд получившего', value: String(session.discordUser), inline: false },
+                        { name: 'Стоимость выдачи', value: String(session.price), inline: false },
+                        { name: 'Дата выдачи', value: `<t:${tsToday}:D>`, inline: true },
+                        { name: 'Дата окончания лицензии', value: `<t:${tsNextMonth}:D>`, inline: true }
                     )
-                    .setFooter({ text: `ID автора: ${user.id}` })
+                    .setFooter({ text: `ID отправителя: ${user.id}` })
                     .setTimestamp();
 
                 if (finalImageUrl) adminEmbed.setImage(finalImageUrl);
@@ -178,33 +206,15 @@ client.on('interactionCreate', async (interaction) => {
                     new ButtonBuilder().setCustomId('admin_deny').setLabel('Отказать').setStyle(ButtonStyle.Danger).setEmoji('❌')
                 );
 
-                await adminChannel.send({ embeds: [adminEmbed], components: [adminButtons] });
+                await adminChannel.send({ content: `<@&${CONFIG.CREATOR_ROLE_ID}>`, embeds: [adminEmbed], components: [adminButtons] });
             }
 
-            // Очищаем сессию и удаляем приватный канал
             sessions.delete(user.id);
             setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
         }
 
-        // 4. Логика работы кнопок «Одобрить» и «Отказать» в канале администрации
-        if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
-            await interaction.deferUpdate();
-
-            const oldEmbeds = interaction.message.embeds;
-            if (!oldEmbeds || oldEmbeds.length === 0) return;
-
-            const updatedEmbed = EmbedBuilder.from(oldEmbeds[0]);
-
-            if (interaction.customId === 'admin_approve') {
-                updatedEmbed.setTitle('✅ Отчет принят').setColor('#2ecc71');
-            } else if (interaction.customId === 'admin_deny') {
-                updatedEmbed.setTitle('❌ Отчет отклонен').setColor('#e74c3c');
-            }
-
-            await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
-        }
-    } catch (globalError) {
-        console.error('❌ КРИТИЧЕСКАЯ ОШИБКА ДЕЙСТВИЯ БОТА:', globalError);
+    } catch (msgError) {
+        console.error('❌ Ошибка во время обработки текстового ответа пользователя:', msgError);
     }
 });
 
