@@ -18,9 +18,41 @@ const CONFIG = {
 // Хранилище для временных данных сессий заполнения
 const sessions = new Map();
 
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log(`🤖 Бот успешно запущен под именем: ${client.user.tag}`);
+
+    // Автоматическая отправка кнопки при старте бота
+    try {
+        const channel = await client.channels.fetch(CONFIG.BUTTON_CHANNEL_ID);
+        if (channel) {
+            // Очищаем старые сообщения бота в этом канале, чтобы кнопки не дублировались
+            const messages = await channel.messages.fetch({ limit: 10 });
+            const botMessages = messages.filter(m => m.author.id === client.user.id);
+            if (botMessages.size > 0) {
+                await channel.bulkDelete(botMessages).catch(() => {});
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('✨ Подача заявки / Заполнение анкеты ✨')
+                .setDescription('Нажмите на кнопку ниже, чтобы начать заполнение формы прямо на сервере. Бот создаст для вас приватный канал.')
+                .setColor('#2ecc71');
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('btn_start_wizard')
+                    .setLabel('Заполнить анкету')
+                    .setStyle(ButtonStyle.Success)
+                    .setEmoji('📝')
+            );
+
+            await channel.send({ embeds: [embed], components: [row] });
+            console.log('✅ Стартовая кнопка успешно обновлена в канале!');
+        }
+    } catch (err) {
+        console.error('Ошибка автоматической отправки кнопки:', err);
+    }
 });
+
 
 // Отправка стартовой кнопки администратором
 client.on('messageCreate', async (message) => {
