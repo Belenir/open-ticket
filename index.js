@@ -39,7 +39,7 @@ client.once('ready', async () => {
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setCustomId('btn_start_wizard')
+                    .setCustomId('btn_open_modal_start') // ИСПРАВЛЕНО: Теперь совпадает с обработчиком
                     .setLabel('Заполнить анкету')
                     .setStyle(ButtonStyle.Success)
                     .setEmoji('📝')
@@ -53,8 +53,7 @@ client.once('ready', async () => {
     }
 });
 
-
-// Отправка стартовой кнопки администратором
+// Отправка стартовой кнопки администратором вручную (резервный вариант)
 client.on('messageCreate', async (message) => {
     if (message.author.bot || message.content !== '!форма') return;
     if (message.channel.id !== CONFIG.BUTTON_CHANNEL_ID) return;
@@ -97,7 +96,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // 2. Пользователь отправил текстовое окно -> Создаем приватный канал для меню и картинки
     if (interaction.isModalSubmit() && interaction.customId === 'mdl_text_inputs') {
-        await interaction.deferReply({ flags: [GatewayIntentBits.Ephemeral] });
+        await interaction.deferReply({ ephemeral: true });
 
         const text1 = interaction.fields.getTextInputValue('inp_text1');
         const text2 = interaction.fields.getTextInputValue('inp_text2');
@@ -171,12 +170,12 @@ client.on('interactionCreate', async (interaction) => {
 
         await ticketChannel.send(`🎉 Спасибо! Анкета успешно отправлена администрации. Этот канал закроется через 5 секунд.`);
 
-        // РАСЧЕТ АВТО-ДАТ
+        // АВТОМАТИЧЕСКИЙ РАСЧЕТ ДАТ
         const now = new Date();
         const nextMonth = new Date();
         nextMonth.setMonth(now.getMonth() + 1);
 
-        // Переводим в формат Discord Timestamp (секунды) для красивого отображения у всех в клиенте
+        // Переводим в формат Discord Timestamp (секунды) для красивого отображения у всех пользователей
         const tsToday = Math.floor(now.getTime() / 1000);
         const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
 
@@ -211,27 +210,3 @@ client.on('interactionCreate', async (interaction) => {
         setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
     }
 
-    // 4. Логика кнопок Одобрить/Отказать в админ-канале
-    if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
-        await interaction.deferUpdate();
-
-        // Получаем текущий Embed из сообщения админов
-        const oldEmbed = interaction.message.embeds[0];
-        if (!oldEmbed) return;
-
-        const updatedEmbed = EmbedBuilder.from(oldEmbed);
-
-        if (interaction.customId === 'admin_approve') {
-            updatedEmbed.setTitle('✅ Отчет принят')
-                        .setColor('#2ecc71'); // Меняем цвет на зеленый
-        } else if (interaction.customId === 'admin_deny') {
-            updatedEmbed.setTitle('❌ Отчет отклонен')
-                        .setColor('#e74c3c'); // Меняем цвет на красный
-        }
-
-        // Обновляем сообщение администрации, убирая кнопки управления
-        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
-    }
-});
-
-client.login(process.env.TOKEN);
