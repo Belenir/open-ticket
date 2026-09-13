@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const http = require('http');
 
 // Создаем веб-заглушку для хостинга Render
@@ -14,7 +14,7 @@ const CONFIG = {
     ADMIN_CHANNEL_ID: "1548418283148017837", 
     CATEGORY_ID: "1548475260276310016",
     CREATOR_ROLE_ID: "1548417844864098445",
-    BUTTON_MESSAGE_ID: "1548497891243331635" // ИСПРАВЛЕНО: Ваш ID сообщения зафиксирован в коде
+    BUTTON_MESSAGE_ID: "1548497891243331635" 
 };
 
 // Хранилище для временных данных сессий заполнения
@@ -40,7 +40,7 @@ client.once('ready', async () => {
             );
 
             let targetMessage = null;
-            if (CONFIG.BUTTON_MESSAGE_ID && !isNaN(CONFIG.BUTTON_MESSAGE_ID)) {
+            if (CONFIG.BUTTON_MESSAGE_ID && CONFIG.BUTTON_MESSAGE_ID.trim() !== "") {
                 targetMessage = await channel.messages.fetch(CONFIG.BUTTON_MESSAGE_ID).catch(() => null);
             }
 
@@ -56,7 +56,7 @@ client.once('ready', async () => {
         console.error('Ошибка автоматического обновления кнопки:', err);
     }
 });
-// Обработка интеракций (Кнопки, Меню выпадающих списков)
+// Обработка интеракций (Кнопки, Меню выпадающих списков, Модальные окна)
 client.on('interactionCreate', async (interaction) => {
     try {
         // 1. Нажатие на кнопку "Заполнить отчет" -> Создаем канал и даем ссылку
@@ -79,10 +79,8 @@ client.on('interactionCreate', async (interaction) => {
 
             sessions.set(user.id, { step: 1, userPing: `<@${user.id}>`, channelId: ticketChannel.id });
 
-            // Бот отправляет уведомление со ссылкой на приватный канал
             await interaction.editReply({ content: `Приватный канал для заполнения отчета создан! 📂 Перейдите сюда: ${ticketChannel}` });
 
-            // ИСПРАВЛЕНО: Бот автоматически удаляет это приватное сообщение ровно через 7 секунд
             setTimeout(() => {
                 interaction.deleteReply().catch(() => {});
             }, 7000);
@@ -106,40 +104,61 @@ client.on('interactionCreate', async (interaction) => {
             await ticketChannel.send(`**Вопрос 4 из 4.** Отлично! Теперь прикрепите и отправьте **Скриншот переписки с человеком о лицензии** напрямую файлом в этот чат:`);
         }
 
-        // 3. Обработка кнопок «Одобрить» и «Отказать» (С проверкой роли Creator и сохранением полей)
+        // 3. Обработка кнопок «Одобрить» и «Отказать» администрации сервера
         if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
             const member = interaction.member;
             
-            if (!CONFIG.CREATOR_ROLE_ID || isNaN(CONFIG.CREATOR_ROLE_ID) || !member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
+            if (!CONFIG.CREATOR_ROLE_ID || !member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
                 return await interaction.reply({ 
                     content: '🛑 **У вас нет роли Creator для управления этим отчетом!**', 
                     ephemeral: true 
                 });
             }
 
-            await interaction.deferUpdate();
-
-            const oldEmbed = interaction.message.embeds;
-            if (!oldEmbed || oldEmbed.length === 0) return;
-
+            const oldEmbeds = interaction.message.embeds;
+            if (!oldEmbeds || oldEmbeds.length === 0) return;
+            const oldEmbed = oldEmbeds[0];
             const authorMention = oldEmbed.description || "Пользователь";
 
-            const updatedEmbed = new EmbedBuilder()
-                .setAuthor(oldEmbed.author ? { name: oldEmbed.author.name, iconURL: oldEmbed.author.iconURL } : null)
-                .setDescription(oldEmbed.description || null)
-                .addFields(oldEmbed.fields)
-                .setFooter(oldEmbed.footer ? { text: oldEmbed.footer.text } : null)
-                .setTimestamp(oldEmbed.timestamp ? new Date(oldEmbed.timestamp) : new Date());
-
-            if (oldEmbed.image && oldEmbed.image.url) {
-                updatedEmbed.setImage(oldEmbed.image.url);
-            }
-
             if (interaction.customId === 'admin_approve') {
-                updatedEmbed.setTitle(`✅ Отчет принят`).setColor('#2ecc71');
-            } else if (interaction.customId === 'admin_deny') {
-                updatedEmbed.setTitle(`❌ Отчет отклонен`).setColor('#e74c3c');
+                await interaction.deferUpdate();
+
+                const updatedEmbed = EmbedBuilder.from(oldEmbed)
+                    .setTitle(`✅ Отчет принят`)
+                    .setColor('#2ecc71');
+
+                await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+            } 
+            else if (interaction.customId === 'admin_deny') {
+                const denyModal = new ModalBuilder()
+                    .setCustomId('mdl_deny_reason_submit')
+                    .setTitle('Причина отказа');
+
+                const reasonInput = new TextInputBuilder()
+                    .setCustomId('inp_deny_reason')
+                    .setLabel('Причина отказа:')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setPlaceholder('Введите подробную причину отклонения отчета...')
+                    .setRequired(true);
+
+                denyModal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+                await interaction.showModal(denyModal);
             }
+        }
+        // 4. Логика обработки отправленного модального окна с причиной отказа
+        if (interaction.isModalSubmit() && interaction.customId === 'mdl_deny_reason_submit') {
+            await interaction.deferUpdate();
+
+            const denyReason = interaction.fields.getTextInputValue('inp_deny_reason');
+            
+            const oldEmbeds = interaction.message.embeds;
+            if (!oldEmbeds || oldEmbeds.length === 0) return;
+            const oldEmbed = oldEmbeds[0];
+
+            const updatedEmbed = EmbedBuilder.from(oldEmbed)
+                .setTitle(`❌ Отчет отклонен`)
+                .setColor('#e74c3c')
+                .addFields({ name: '🚫 Причина отказа', value: String(denyReason), inline: false });
 
             await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
         }
@@ -192,7 +211,7 @@ client.on('messageCreate', async (message) => {
             const attachment = message.attachments.first();
             
             if (!attachment || !attachment.contentType || !attachment.contentType.startsWith('image/')) {
-                return await ticketChannel.send(`⚠️ **Ошибка: Вы не прикрепили изображение или отправили неподдерживаемый файл!**\nПожалуйста, прикрепите и отправьте именно **картинку/скриншот** напрямую файлом в этот чат:`);
+                return await ticketChannel.send('⚠️ **Ошибка: Вы не прикрепили изображение!**\nПожалуйста, прикрепите и отправьте именно **картинку/скриншот** напрямую файлом:');
             }
 
             const finalImageUrl = attachment.proxyURL;
@@ -243,6 +262,5 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-client.on('error', console.error); // Защита от аварийного падения WebSocket-соединения
-
+client.on('error', console.error);
 client.login(process.env.TOKEN);
