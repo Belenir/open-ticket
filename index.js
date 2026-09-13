@@ -49,7 +49,7 @@ client.once('ready', async () => {
                 console.log('✅ Существующая кнопка успешно ОТРЕДАКТИРОВАНА по точному ID!');
             } else {
                 const sentMessage = await channel.send({ embeds: [embed], components: [row] });
-                console.log(`⚠️ ВНИМАНИЕ! Новая кнопка создана. СКОПИРУЙТЕ ЕЁ ID ИЗ КОНСОЛИ И ВСТАВЬТЕ В КОД: ${sentMessage.id}`);
+                console.log(`⚠️ ВНИМАНИЕ! Новая кнопка создана. ID: ${sentMessage.id}`);
             }
         }
     } catch (err) {
@@ -59,9 +59,9 @@ client.once('ready', async () => {
 // Обработка интеракций (Кнопки, Меню выпадающих списков, Модальные окна)
 client.on('interactionCreate', async (interaction) => {
     try {
-        // 1. Нажатие на кнопку "Заполнить отчет" -> Создаем канал и даем ссылку
+        // 1. Нажатие на кнопку "Заполнить отчет" -> Перешли на новый стандарт FLAGS
         if (interaction.isButton() && interaction.customId === 'btn_start_wizard') {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: [64] }); // ИСПРАВЛЕНО: Прямой флаг Ephemeral без предупреждений Node.js
 
             const guild = interaction.guild;
             const user = interaction.user;
@@ -95,7 +95,7 @@ client.on('interactionCreate', async (interaction) => {
             const session = sessions.get(user.id);
             if (!session || session.step !== 3) return;
 
-            session.price = interaction.values; 
+            session.price = interaction.values[0]; 
             session.step = 4; 
 
             const ticketChannel = interaction.channel;
@@ -111,14 +111,13 @@ client.on('interactionCreate', async (interaction) => {
             if (!CONFIG.CREATOR_ROLE_ID || !member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
                 return await interaction.reply({ 
                     content: '🛑 **У вас нет роли Creator для управления этим отчетом!**', 
-                    ephemeral: true 
+                    flags: [64] 
                 });
             }
 
             const oldEmbeds = interaction.message.embeds;
             if (!oldEmbeds || oldEmbeds.length === 0) return;
             const oldEmbed = oldEmbeds[0];
-            const authorMention = oldEmbed.description || "Пользователь";
 
             if (interaction.customId === 'admin_approve') {
                 await interaction.deferUpdate();
@@ -130,6 +129,7 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
             } 
             else if (interaction.customId === 'admin_deny') {
+                // Модальное окно открытия причины отказа
                 const denyModal = new ModalBuilder()
                     .setCustomId('mdl_deny_reason_submit')
                     .setTitle('Причина отказа');
