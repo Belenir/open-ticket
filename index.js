@@ -24,7 +24,6 @@ http.createServer((req, res) => res.end('Бот активен!')).listen(PORT, 
     console.log(`🌐 Веб-сервер запущен на порту ${PORT}`);
 });
 
-// Пингуем сами себя каждые 14 минут, чтобы Render не засыпал
 setInterval(() => {
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
     const lib = url.startsWith('https') ? https : http;
@@ -43,10 +42,16 @@ const CONFIG = {
     ADMIN_CHANNEL_ID: "1548418283148017837",
     CATEGORY_ID: "1548475260276310016",
     CREATOR_ROLE_ID: "1548417844864098445",
-    BUTTON_MESSAGE_ID: "1548497891243331635"
+    BUTTON_MESSAGE_ID: "1548497891243331635",
+
+    // 👇 Картинка, которая автоматически подставляется
+    //    при выборе варианта "500 000$" (пропуск 4 шага)
+    DEFAULT_SCREENSHOT_URL: "https://i.imgur.com/26UtsTJ.png",
+
+    // 👇 Значение опции, при котором пропускается 4 шаг
+    SKIP_STEP4_PRICE: "500 000$"
 };
 
-// Хранилище сессий. Ключ — ID пользователя, значение — объект сессии
 const sessions = new Map();
 
 // ============================================================
@@ -61,7 +66,71 @@ const client = new Client({
 });
 
 // ============================================================
-// 4. ГОТОВНОСТЬ БОТА — публикация кнопки
+// 4. ФУНКЦИЯ ФИНАЛИЗАЦИИ ОТЧЕТА (общая для обоих сценариев)
+// ============================================================
+async function finalizeReport({ user, session, ticketChannel, imageUrl, guild }) {
+    // Сообщение пользователю в приватном канале
+    await ticketChannel.send(
+        `🎉 Спасибо! Отчет успешно сформирован.\n\n🔗 Нажмите сюда, чтобы вернуться обратно: <#${CONFIG.BUTTON_CHANNEL_ID}>\n*(Этот чат автоматически удалится через 5 секунд)*`
+    ).catch(() => {});
+
+    // Расчет дат
+    const now = new Date();
+    const nextMonth = new Date();
+    nextMonth.setMonth(now.getMonth() + 1);
+
+    const tsToday = Math.floor(now.getTime() / 1000);
+    const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
+
+    // Отправка в админ-канал
+    const adminChannel = guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
+    if (adminChannel) {
+        const adminEmbed = new EmbedBuilder()
+            .setAuthor({
+                name: `Отправитель: ${user.username}`,
+                iconURL: user.displayAvatarURL({ dynamic: true })
+            })
+            .setTitle('📥 Новый отчет о выдаче лицензии')
+            .setDescription(`Автор отчета: ${user}`)
+            .setColor('#3498db')
+            .addFields(
+                { name: 'Имя Фамилия | Статик получившего', value: String(session.nameStatic || '—'), inline: false },
+                { name: 'Дискорд получившего', value: String(session.discordUser || '—'), inline: false },
+                { name: 'Стоимость выдачи', value: String(session.price || '—'), inline: false },
+                { name: 'Дата выдачи', value: `<t:${tsToday}:D>`, inline: true },
+                { name: 'Дата окончания лицензии', value: `<t:${tsNextMonth}:D>`, inline: true }
+            )
+            .setFooter({ text: `ID отправителя: ${user.id}` })
+            .setTimestamp()
+            .setImage(imageUrl);
+
+        const adminButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('admin_approve')
+                .setLabel('Одобрить')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('✅'),
+            new ButtonBuilder()
+                .setCustomId('admin_deny')
+                .setLabel('Отказать')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('❌')
+        );
+
+        await adminChannel.send({
+            content: `<@&${CONFIG.CREATOR_ROLE_ID}>`,
+            embeds: [adminEmbed],
+            components: [adminButtons]
+        }).catch(() => {});
+    }
+
+    // Удаляем сессию и канал
+    sessions.delete(user.id);
+    setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+}
+
+// ============================================================
+// 5. ГОТОВНОСТЬ БОТА — публикация кнопки
 // ============================================================
 client.once('clientReady', async () => {
     console.log(`🤖 Бот успешно запущен под именем: ${client.user.tag}`);
@@ -104,22 +173,19 @@ client.once('clientReady', async () => {
 });
 
 // ============================================================
-// 5. ОБРАБОТКА ВЗАИМОДЕЙСТВИЙ
+// 6. ОБРАБОТКА ВЗАИМОДЕЙСТВИЙ
 // ============================================================
 client.on('interactionCreate', async (interaction) => {
     try {
         // ----------------------------------------------------
-        // 5.1. Кнопка "Заполнить отчет"
-        // ВАЖНО: Сначала deferReply, потом создание канала!
+        // 6.1. Кнопка "Заполнить отчет"
         // ----------------------------------------------------
         if (interaction.isButton() && interaction.customId === 'btn_start_wizard') {
-            // ШАГ 1: мгновенно подтверждаем взаимодействие (в течение 3 секунд)
             await interaction.deferReply({ flags: [64] });
 
             const guild = interaction.guild;
             const user = interaction.user;
 
-            // ШАГ 2: создаем приватный канал (может занять время, но Discord уже ждет)
             let ticketChannel;
             try {
                 ticketChannel = await guild.channels.create({
@@ -157,7 +223,6 @@ client.on('interactionCreate', async (interaction) => {
                 }).catch(() => {});
             }
 
-            // ШАГ 3: создаем сессию
             sessions.set(user.id, {
                 step: 1,
                 userPing: `<@${user.id}>`,
@@ -165,7 +230,6 @@ client.on('interactionCreate', async (interaction) => {
                 createdAt: Date.now()
             });
 
-            // ШАГ 4: сообщаем пользователю
             await interaction.editReply({
                 content: `Приватный канал для заполнения отчета создан! 📂 Перейдите сюда: ${ticketChannel}`
             }).catch(() => {});
@@ -174,14 +238,14 @@ client.on('interactionCreate', async (interaction) => {
                 interaction.deleteReply().catch(() => {});
             }, 7000);
 
-            // ШАГ 5: первый вопрос в приватном канале
             await ticketChannel.send(
                 `${user}\n**Вопрос 1 из 4.** Введите: *Имя Фамилия | Статик получившего лицензию*`
             ).catch(() => {});
         }
 
         // ----------------------------------------------------
-        // 5.2. Выпадающее меню выбора стоимости (Шаг 3)
+        // 6.2. Выпадающее меню выбора стоимости (Шаг 3)
+        //     👇 ЗДЕСЬ ПРОИСХОДИТ ПРОПУСК 4 ШАГА
         // ----------------------------------------------------
         if (interaction.isStringSelectMenu() && interaction.customId === 'select_license_price') {
             await interaction.deferUpdate();
@@ -195,13 +259,31 @@ client.on('interactionCreate', async (interaction) => {
 
             const ticketChannel = interaction.channel;
             await interaction.editReply({ components: [] }).catch(() => {});
+
+            // 👇 ПРОВЕРКА: если выбрана цена 500 000$ — пропускаем 4 шаг
+            if (session.price === CONFIG.SKIP_STEP4_PRICE) {
+                await ticketChannel.send(
+                    `✅ Вы выбрали вариант **${CONFIG.SKIP_STEP4_PRICE}** — шаг со скриншотом пропускается, картинка будет подставлена автоматически.`
+                ).catch(() => {});
+
+                await finalizeReport({
+                    user,
+                    session,
+                    ticketChannel,
+                    imageUrl: CONFIG.DEFAULT_SCREENSHOT_URL,
+                    guild: interaction.guild
+                });
+                return;
+            }
+
+            // Иначе — обычный 4 шаг со скриншотом
             await ticketChannel.send(
                 `**Вопрос 4 из 4.** Отлично! Теперь прикрепите и отправьте **Скриншот переписки с человеком о лицензии** напрямую файлом в этот чат:`
             ).catch(() => {});
         }
 
         // ----------------------------------------------------
-        // 5.3. Кнопки "Одобрить" / "Отказать" (для Creator)
+        // 6.3. Кнопки "Одобрить" / "Отказать"
         // ----------------------------------------------------
         if (
             interaction.isButton() &&
@@ -246,7 +328,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         // ----------------------------------------------------
-        // 5.4. Модальное окно с причиной отказа
+        // 6.4. Модальное окно с причиной отказа
         // ----------------------------------------------------
         if (interaction.isModalSubmit() && interaction.customId === 'mdl_deny_reason_submit') {
             await interaction.deferUpdate();
@@ -267,7 +349,6 @@ client.on('interactionCreate', async (interaction) => {
     } catch (interError) {
         console.error('❌ Ошибка во время обработки интеракций:', interError);
 
-        // Пытаемся сообщить пользователю об ошибке, если еще не ответили
         try {
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({
@@ -280,7 +361,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ============================================================
-// 6. ОБРАБОТКА СООБЩЕНИЙ (шаги 1, 2 и 4)
+// 7. ОБРАБОТКА СООБЩЕНИЙ (шаги 1, 2 и 4)
 // ============================================================
 client.on('messageCreate', async (message) => {
     try {
@@ -290,7 +371,6 @@ client.on('messageCreate', async (message) => {
         const user = message.author;
         const session = sessions.get(user.id);
 
-        // Сообщение не в нашем приватном канале — игнорируем
         if (!session || message.channel.id !== session.channelId) return;
 
         const ticketChannel = message.channel;
@@ -327,7 +407,7 @@ client.on('messageCreate', async (message) => {
             return await ticketChannel.send({ embeds: [menuEmbed], components: [row] }).catch(() => {});
         }
 
-        // --- Шаг 4: Скриншот ---
+        // --- Шаг 4: Скриншот (только для 100 000$ и 300 000$) ---
         if (session.step === 4) {
             const attachment = message.attachments.first();
 
@@ -337,62 +417,13 @@ client.on('messageCreate', async (message) => {
                 ).catch(() => {});
             }
 
-            const finalImageUrl = attachment.proxyURL;
-
-            await ticketChannel.send(
-                `🎉 Спасибо! Отчет успешно сформирован.\n\n🔗 Нажмите сюда, чтобы вернуться обратно: <#${CONFIG.BUTTON_CHANNEL_ID}>\n*(Этот чат автоматически удалится через 5 секунд)*`
-            ).catch(() => {});
-
-            const now = new Date();
-            const nextMonth = new Date();
-            nextMonth.setMonth(now.getMonth() + 1);
-
-            const tsToday = Math.floor(now.getTime() / 1000);
-            const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
-
-            const adminChannel = message.guild.channels.cache.get(CONFIG.ADMIN_CHANNEL_ID);
-            if (adminChannel) {
-                const adminEmbed = new EmbedBuilder()
-                    .setAuthor({
-                        name: `Отправитель: ${user.username}`,
-                        iconURL: user.displayAvatarURL({ dynamic: true })
-                    })
-                    .setTitle('📥 Новый отчет о выдаче лицензии')
-                    .setDescription(`Автор отчета: ${user}`)
-                    .setColor('#3498db')
-                    .addFields(
-                        { name: 'Имя Фамилия | Статик получившего', value: String(session.nameStatic), inline: false },
-                        { name: 'Дискорд получившего', value: String(session.discordUser), inline: false },
-                        { name: 'Стоимость выдачи', value: String(session.price), inline: false },
-                        { name: 'Дата выдачи', value: `<t:${tsToday}:D>`, inline: true },
-                        { name: 'Дата окончания лицензии', value: `<t:${tsNextMonth}:D>`, inline: true }
-                    )
-                    .setFooter({ text: `ID отправителя: ${user.id}` })
-                    .setTimestamp()
-                    .setImage(finalImageUrl);
-
-                const adminButtons = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('admin_approve')
-                        .setLabel('Одобрить')
-                        .setStyle(ButtonStyle.Success)
-                        .setEmoji('✅'),
-                    new ButtonBuilder()
-                        .setCustomId('admin_deny')
-                        .setLabel('Отказать')
-                        .setStyle(ButtonStyle.Danger)
-                        .setEmoji('❌')
-                );
-
-                await adminChannel.send({
-                    content: `<@&${CONFIG.CREATOR_ROLE_ID}>`,
-                    embeds: [adminEmbed],
-                    components: [adminButtons]
-                }).catch(() => {});
-            }
-
-            sessions.delete(user.id);
-            setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+            await finalizeReport({
+                user,
+                session,
+                ticketChannel,
+                imageUrl: attachment.proxyURL,
+                guild: message.guild
+            });
         }
     } catch (error) {
         console.error('❌ Ошибка при обработке сообщения:', error);
@@ -400,7 +431,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // ============================================================
-// 7. СЛУЖЕБНЫЕ ОБРАБОТЧИКИ
+// 8. СЛУЖЕБНЫЕ ОБРАБОТЧИКИ
 // ============================================================
 client.on('error', (err) => console.error('❌ Discord Client Error:', err));
 process.on('unhandledRejection', (err) => console.error('❌ Unhandled Rejection:', err));
@@ -417,6 +448,6 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // ============================================================
-// 8. ЗАПУСК
+// 9. ЗАПУСК
 // ============================================================
 client.login(process.env.TOKEN);
