@@ -13,7 +13,7 @@ const CONFIG = {
     BUTTON_CHANNEL_ID: "1548418283148017837", 
     ADMIN_CHANNEL_ID: "1548418283148017837",
     CATEGORY_ID: "1548475260276310016",
-    CREATOR_ROLE_ID: "ID_ВАШЕЙ_РОЛИ_CREATOR" // Убедитесь, что здесь вставлен цифровой ID роли
+    CREATOR_ROLE_ID: "1548417844864098445" // ПОМЕНЯЙТЕ ТОЛЬКО ТЕКСТ ВНУТРИ КАВЫЧЕК НА ЦИФРЫ
 };
 
 // Хранилище для временных данных сессий заполнения
@@ -94,13 +94,12 @@ client.on('interactionCreate', async (interaction) => {
             await ticketChannel.send(`**Вопрос 4 из 4.** Отлично! Теперь прикрепите и отправьте **Скриншот переписки с человеком о лицензии** напрямую файлом в этот чат:`);
         }
 
-        // 3. Обработка кнопок «Одобрить» и «Отказать» (С ПРОВЕРКОЙ НА РОЛЬ CREATOR)
+        // 3. Обработка кнопок «Одобрить» и «Отказать» (С проверкой роли Creator)
         if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
-            
-            // Проверяем, есть ли у пользователя роль Creator
             const member = interaction.member;
-            if (!member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
-                // Если роли нет, шлем скрытый отказ (никто другой его не увидит)
+            
+            // Если ID роли настроен некорректно или у пользователя её нет — блокируем нажатие
+            if (!CONFIG.CREATOR_ROLE_ID || isNaN(CONFIG.CREATOR_ROLE_ID) || !member.roles.cache.has(CONFIG.CREATOR_ROLE_ID)) {
                 return await interaction.reply({ 
                     content: '🛑 **У вас нет роли Creator для управления этим отчетом!**', 
                     ephemeral: true 
@@ -112,7 +111,7 @@ client.on('interactionCreate', async (interaction) => {
             const oldEmbeds = interaction.message.embeds;
             if (!oldEmbeds || oldEmbeds.length === 0) return;
 
-            const updatedEmbed = EmbedBuilder.from(oldEmbeds[0]);
+            const updatedEmbed = EmbedBuilder.from(oldEmbeds);
             const authorTag = interaction.message.description || "Пользователь";
 
             if (interaction.customId === 'admin_approve') {
@@ -206,7 +205,9 @@ client.on('messageCreate', async (message) => {
                     new ButtonBuilder().setCustomId('admin_deny').setLabel('Отказать').setStyle(ButtonStyle.Danger).setEmoji('❌')
                 );
 
-                await adminChannel.send({ content: `<@&${CONFIG.CREATOR_ROLE_ID}>`, embeds: [adminEmbed], components: [adminButtons] });
+                // Корректная отправка тега роли администрации (тегается только если ID указан верно)
+                const mentionContent = (CONFIG.CREATOR_ROLE_ID && !isNaN(CONFIG.CREATOR_ROLE_ID)) ? `<@&${CONFIG.CREATOR_ROLE_ID}>` : "⚠️ Роль Creator не настроена";
+                await adminChannel.send({ content: mentionContent, embeds: [adminEmbed], components: [adminButtons] });
             }
 
             sessions.delete(user.id);
