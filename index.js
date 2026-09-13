@@ -39,7 +39,7 @@ client.once('ready', async () => {
 
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setCustomId('btn_open_modal_start') // ИСПРАВЛЕНО: Теперь совпадает с обработчиком
+                    .setCustomId('btn_open_modal_start')
                     .setLabel('Заполнить анкету')
                     .setStyle(ButtonStyle.Success)
                     .setEmoji('📝')
@@ -52,29 +52,6 @@ client.once('ready', async () => {
         console.error('Ошибка автоматической отправки кнопки:', err);
     }
 });
-
-// Отправка стартовой кнопки администратором вручную (резервный вариант)
-client.on('messageCreate', async (message) => {
-    if (message.author.bot || message.content !== '!форма') return;
-    if (message.channel.id !== CONFIG.BUTTON_CHANNEL_ID) return;
-
-    const embed = new EmbedBuilder()
-        .setTitle('✨ Подача заявки / Заполнение анкеты ✨')
-        .setDescription('Нажмите на кнопку ниже, чтобы открыть форму заполнения.')
-        .setColor('#2ecc71');
-
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('btn_open_modal_start')
-            .setLabel('Заполнить анкету')
-            .setStyle(ButtonStyle.Success)
-            .setEmoji('📝')
-    );
-
-    await message.channel.send({ embeds: [embed], components: [row] });
-    await message.delete().catch(() => {});
-});
-
 // Обработка интеракций (Кнопки, Модальные окна, Меню)
 client.on('interactionCreate', async (interaction) => {
     
@@ -146,11 +123,11 @@ client.on('interactionCreate', async (interaction) => {
         const session = sessions.get(user.id);
         if (!session) return;
 
-        session.variant = interaction.values[0]; // Сохраняем выбор
+        session.variant = interaction.values; // Сохраняем выбор
 
         const ticketChannel = interaction.channel;
         
-        // Очищаем компоненты меню, чтобы пользователь не нажал дважды
+        // Удаляем выпадающее меню, чтобы избежать повторных нажатий
         await interaction.editReply({ components: [] });
 
         await ticketChannel.send(`**Шаг 4 из 4.** Отлично! Теперь **прикрепите и отправьте картинку/скриншот** напрямую файлом в этот чат:`);
@@ -175,7 +152,7 @@ client.on('interactionCreate', async (interaction) => {
         const nextMonth = new Date();
         nextMonth.setMonth(now.getMonth() + 1);
 
-        // Переводим в формат Discord Timestamp (секунды) для красивого отображения у всех пользователей
+        // Переводим в формат Discord Timestamp (секунды)
         const tsToday = Math.floor(now.getTime() / 1000);
         const tsNextMonth = Math.floor(nextMonth.getTime() / 1000);
 
@@ -210,3 +187,28 @@ client.on('interactionCreate', async (interaction) => {
         setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
     }
 
+    // 4. Логика работы кнопок «Одобрить» и «Отказать» в канале администрации
+    if (interaction.isButton() && (interaction.customId === 'admin_approve' || interaction.customId === 'admin_deny')) {
+        await interaction.deferUpdate();
+
+        // Получаем текущий Embed из сообщения админов
+        const oldEmbeds = interaction.message.embeds;
+        if (!oldEmbeds || oldEmbeds.length === 0) return;
+
+        // Создаем обновленный Embed на основе старого
+        const updatedEmbed = EmbedBuilder.from(oldEmbeds);
+
+        if (interaction.customId === 'admin_approve') {
+            updatedEmbed.setTitle('✅ Отчет принят') // Меняем заголовок
+                        .setColor('#2ecc71');       // Меняем цвет полоски на зеленый
+        } else if (interaction.customId === 'admin_deny') {
+            updatedEmbed.setTitle('❌ Отчет отклонен') // Меняем заголовок
+                        .setColor('#e74c3c');       // Меняем цвет полоски на красный
+        }
+
+        // Обновляем сообщение: убираем кнопки управления, сохраняя все поля и медиа
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+    }
+});
+
+client.login(process.env.TOKEN);
